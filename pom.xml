@@ -4,6 +4,7 @@
 	<groupId>in.javahome</groupId>
 	<artifactId>stradegi</artifactId>
 	<packaging>war</packaging>
+	<version>1.0</version>
 	<name>java-app</name>
 
 	<url>http://maven.apache.org</url>
