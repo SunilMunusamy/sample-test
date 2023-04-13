@@ -1,0 +1,384 @@
+kubectl get pods -n ishtika-perf
+kubectl exec -n ishtika-perf nflows-ui-858ff6f8f7-k9fqw -it -- bash
+
+kubectl exec -n ishtika-perf nflows-data-engine-cb85ff45-thc2b -it -- bash
+
+#RESTART PODS
+kubectl -n ishtika-perf exec -it neo4j-db-797d8f95d8-2qqfq -- neo4j stop --expand-commands
+
+kubectl -n ishtika-perf scale deployment neo4j-db --replicas=0
+
+kubectl -n ishtika-perf scale deployment neo4j-db --replicas=1
+
+
+##Docker file
+FROM tomcat:jdk15-openjdk
+
+COPY docker/docker-entrypoint.sh /usr/local/tomcat
+COPY ./nFlows-*.war /usr/local/tomcat/webapps/nFlows.war
+COPY ./nFlowsUtility-*.jar /usr/local/tomcat/nFlowsUtility.jar
+COPY ./applicationinsights-agent-*.jar /usr/local/tomcat/applicationinsights-agent.jar
+
+ENV CATALINA_OPTS="-javaagent:/usr/local/tomcat/applicationinsights-agent.jar"
+
+WORKDIR /usr/local/tomcat
+
+RUN mkdir -p /usr/local/tomcat/WEB-INF/classes
+RUN [ "chmod", "+x", "./docker-entrypoint.sh", "./nFlowsUtility.jar" ]
+
+ENTRYPOINT ["./docker-entrypoint.sh"]
+
+
+
+
+#BUILD
+
+# Docker
+# Build and push an image to Azure Container Registry
+
+trigger:
+  - master
+
+variables:
+  dockerfilePath: "$(Build.SourcesDirectory)/"
+  poolName: "NT-CISXscalesetCUSDEV"
+  serviceConnection: "NT-CISX-PCE-3.0-CUS-DEV-RG-001-SC"
+  buildTag: "4.1.43"
+
+stages:   
+
+
+
+  - stage: Build
+    displayName: Build and push stage
+    jobs:
+      - job: Build
+        displayName: Build
+        pool: $(poolName)
+        steps:
+          # Download an artifact with name 'com.test:testpackage' to $(System.ArtifactsDirectory)
+          - task: DownloadPackage@1
+            inputs:
+              packageType: 'maven'
+              feed: 'CIS-PCE/Ishtika' # <projectId>/<feedId>
+              definition: 'com.stradegi.nflows:nFlows'
+              # FIXME: Use pipeline var for version
+              version: "$(buildTag)" # Should be normalized version
+              #files: '*.pom'
+              downloadPath: '$(Build.SourcesDirectory)'
+          
+          - task: DownloadPackage@1
+            inputs:
+              packageType: 'maven'
+              feed: 'CIS-PCE/Ishtika' # <projectId>/<feedId>
+              definition: 'com.stradegi.nflows:nFlowsUtility' 
+              version: '4.0.209' # Should be normalized version
+              #files: '*.pom'
+              downloadPath: '$(Build.SourcesDirectory)'
+              
+          - task: DownloadPackage@1
+            inputs:
+              packageType: 'maven'
+              feed: 'CIS-PCE/Ishtika' # <projectId>/<feedId>
+              definition: 'com.microsoft.azure:applicationinsights-agent' 
+              version: '3.4.4' # Should be normalized version
+              #files: '*.pom'
+              downloadPath: '$(Build.SourcesDirectory)'
+
+          - task: Docker@0
+            displayName: Build an image
+            inputs:
+              azureSubscription: "$(serviceConnection)"
+              azureContainerRegistry: '{"loginServer" : "acrpcecusd.azurecr.io", "id" : "acrpcecusd"}'
+              dockerFile: "$(dockerfilePath)/Dockerfile"
+              buildContext: "$(dockerfilePath)"
+              # FIXME: Use pipeline var
+              imageName: "nFlows:$(buildTag)"
+          - task: Docker@0
+            displayName: Push an image to container registry
+            inputs:
+              azureSubscription: "$(serviceConnection)"
+              azureContainerRegistry: '{"loginServer" : "acrpcecusd.azurecr.io", "id" : "acrpcecusd"}'
+              action: "Push an image"
+              # FIXME: Use pipeline var
+              imageName: "nFlows:$(buildTag)"
+
+
+
+
+
+
+######################################
+tomcat-ui-deployment.yaml
+apiVersion: apps/v1 ## Kubernetes API Version
+kind: Deployment ## Type of resource
+metadata:
+  labels:
+    app: nflows-ui ## Labels given by user
+  name: nflows-ui ## Name given to the <kind> resource
+  namespace: ishtika-perf ## Namespace in which to deploy the resource
+spec:
+  replicas: 1
+  selector:
+    matchLabels: ## Should be same as spec.template.labels
+      app: nflows-ui
+  template:
+    metadata:
+      labels: ## Should be same as spec.selector.matchLabels
+        app: nflows-ui
+    spec:
+      imagePullSecrets:
+        - name: acr-secret
+      volumes:
+        - name: certs
+          secret:
+            secretName: aks-pce-d.appazrcus.ntrs.com
+            optional: false # secret must exist
+      containers:
+        - env:
+            - name: CONTEXT_PATH
+              value: "/nFlows"
+          envFrom: 
+            - configMapRef:
+                name: nflows-common-config
+          image: "acrpcecusd.azurecr.io/nflows:4.0.311"
+          imagePullPolicy: Always
+          #command:
+          #  - tail
+          #  - "-f"
+          #  - /dev/null
+          volumeMounts:
+            - name: certs
+              mountPath: "/certs"
+              readOnly: true
+          livenessProbe:
+            failureThreshold: 6
+            httpGet:
+              path: /nFlows/
+              port: http
+              scheme: HTTP
+            initialDelaySeconds: 120
+            periodSeconds: 10
+            successThreshold: 1
+            timeoutSeconds: 5
+          name: nflows-ui
+          ports:
+            - containerPort: 8080
+              name: http
+              protocol: TCP
+          readinessProbe:
+            failureThreshold: 3
+            httpGet:
+              path: /nFlows/
+              port: http
+              scheme: HTTP
+            initialDelaySeconds: 30
+            periodSeconds: 5
+            successThreshold: 1
+            timeoutSeconds: 3
+          resources:
+            requests:
+              memory: "8192Mi"
+              cpu: "2000m"
+            limits:
+              memory: "10240Mi"
+              cpu: "3500m"
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      terminationGracePeriodSeconds: 30
+      tolerations:
+        - effect: NoExecute
+          key: node.kubernetes.io/not-ready
+          operator: Exists
+          tolerationSeconds: 300
+        - effect: NoExecute
+          key: node.kubernetes.io/unreachable
+          operator: Exists
+          tolerationSeconds: 300
+        - effect: NoSchedule
+          key: node.kubernetes.io/memory-pressure
+          operator: Exists
+
+
+
+#####################DEPLOY
+
+parameters:
+  - name: project
+    displayName: App Project name
+    type: string
+    default: IshtikaAppDeployment
+    values:
+      - IshtikaAppDeployment
+
+  - name: resourceGroup
+    displayName: Resource Group Name
+    type: string
+    default: CUS-CISX-D-PCE-RG-001
+    values:
+      - CUS-CISX-D-PCE-RG-001
+
+  - name: appenvironment
+    displayName: Application environment Namespace
+    type: string
+    default: ishtika-d
+    values:
+      - ishtika-d
+      - ishtika-q
+variables:
+    - name: 'environment'
+      ${{ if eq(parameters['appenvironment'], 'ishtika-d') }}:
+        value: "dev-values.yaml"
+      ${{ if eq(parameters['appenvironment'], 'ishtika-q') }}:
+        value: "qa-values.yaml"  
+
+trigger:
+  - none
+stages:
+  - stage: Deploy
+    displayName: Deploy Resources
+    jobs:
+      - job: 'Deploy_helmchart'                            
+        pool: NT-CISXscalesetCUSDEV
+        displayName: 'Deploy helm chart for Ishtika-app'
+        steps:
+          - task: AzureCLI@2
+            name: RunAzCLIScripts
+            inputs:
+              azureSubscription: 'NT-CISX-PCE-3.0-CUS-DEV-RG-001-SC'
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                ls -ltr
+                echo ${{variables.environment}}
+                pwd
+                echo "***** access credentials for the cluster ******"
+                az account set --subscription "NT-CISX-CUS-DEV"
+                az aks get-credentials --name AKS-PCE-CUS-D-001 --resource-group ${{ parameters.resourceGroup }}  --admin
+                
+                kubectl version
+                echo "version = "kubectl helm version
+                helm upgrade --install nflows-ui . \
+                --namespace ${{ parameters.appenvironment }} \
+                --values ${{variables.environment}}
+				
+			
+
+
+#############################################
+docker entrypoint.sh
+
+#!/bin/bash
+
+echo "Importing to cacerts"
+keytool -keystore $JAVA_HOME/lib/security/cacerts -storepass changeit -noprompt -trustcacerts -importcert -alias ntdevcert -file /certs/tls.crt
+
+
+echo "Calling utility to generate config file"
+java -jar ./nFlowsUtility.jar TOMCAT -app_name $APP_NAME -url $APP_URL -path $WAR_PATH -port $PORT
+java -jar ./nFlowsUtility.jar NEO4JDB -host $NEO4J_HOST -port $NEO4J_PORT -user $NEO4J_USER -pass $NEO4J_PWD
+java -jar ./nFlowsUtility.jar MONGODB -host $MONGODB_HOST -port $MONGODB_PORT -db $MONGODB_NAME -user $MONGODB_USER -pass $MONGODB_PWD
+
+
+echo "Calling utility to encrypt URLs"
+DATAENGINE_URL_ENC=`java -jar ./nFlowsUtility.jar ENCRYPT $DATAENGINE_URL`
+RULEENGINE_URL_ENC=`java -jar ./nFlowsUtility.jar ENCRYPT $RULEENGINE_URL`
+EXPORTAPIENGINE_URL_ENC=`java -jar ./nFlowsUtility.jar ENCRYPT $EXPORTAPIENGINE_URL`
+NEO4J_PROTOCOL_ENC=`java -jar ./nFlowsUtility.jar ENCRYPT $NEO4J_PROTOCOL`
+HIGHCHARTS_URL_ENC=`java -jar ./nFlowsUtility.jar ENCRYPT $HIGHCHARTS_URL`
+
+echo "Calling utility to encrypt neo4j db name - to be removed when its included part of NOE4JDB group"
+NEO4J_DBNAME_ENC=`java -jar ./nFlowsUtility.jar ENCRYPT $NEO4J_DBNAME`
+
+echo "Adding extra config"
+cat << EOF >> AppConfig.Properties
+NEO4J_DBNAME=$NEO4J_DBNAME_ENC
+NEO4J_PROTOCOL=$NEO4J_PROTOCOL_ENC
+DATAENGINE_URL=$DATAENGINE_URL_ENC
+RULEENGINE_URL=$RULEENGINE_URL_ENC
+EXPORTAPIENGINE_URL=$EXPORTAPIENGINE_URL_ENC
+HIGHCHARTS_URL=$HIGHCHARTS_URL_ENC
+RULEHIERARCHY=$RULEHIERARCHY
+server.servlet.context-path=$CONTEXT_PATH
+server.port=8081
+server.tomcat.max-threads=1200
+server.tomcat.accept-count=1200
+spring.main.allow-bean-definition-overriding=true
+spring.servlet.multipart.max-request-size=10MB
+EOF
+
+#mkdir WEB-INF/classes
+
+echo "Replacing config file in the war"
+cp AppConfig.Properties WEB-INF/classes
+jar -uvf /usr/local/tomcat/webapps/nFlows.war WEB-INF/classes/AppConfig.Properties
+
+echo "Launching tomcat..."
+catalina.sh run
+
+####################################################################################
+
+tomcat-ingress.yaml
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ishtika-ui
+  namespace: ishtika-perf
+  annotations:
+    kubernetes.io/backend-protocol: HTTP
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      more_clear_headers "Referrer*";
+      add_header Referrer-Policy "same-origin";
+      if ($request_uri ~* \.(js|css|gif|jpe?g|png|svg|woff)) {
+        expires 1M;
+        add_header Cache-Control "public";
+      }
+    nginx.ingress.kubernetes.io/cors-allow-credentials: "true"
+    nginx.ingress.kubernetes.io/cors-allow-methods: GET, POST, OPTIONS
+    nginx.ingress.kubernetes.io/cors-allow-origin: $http_origin
+    nginx.ingress.kubernetes.io/enable-cors: "true"
+    #nginx.ingress.kubernetes.io/rewrite-target: /nFlows$1$2
+    nginx.ingress.kubernetes.io/use-regex: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: aks-pce-d.appazrcus.ntrs.com
+      http:
+        paths:
+          - backend:
+              service:
+                name: nflows-ui-service
+                port:
+                  number: 80
+            path: /nFlows
+            pathType: Prefix
+  tls:
+    - hosts:
+        - aks-pce-d.appazrcus.ntrs.com
+      secretName: aks-pce-d.appazrcus.ntrs.com
+
+
+
+###service.yaml
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: nflows-ui-service
+  namespace: ishtika-perf
+  annotations:
+    service.beta.kubernetes.io/azure-load-balancer-internal: "true"
+spec:
+  type: LoadBalancer
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8080
+      name: http
+  selector:
+    app: nflows-ui
+			
