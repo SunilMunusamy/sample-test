@@ -1,0 +1,24 @@
+kind: Service
+apiVersion: v1
+metadata:
+    name: nflows-neo4j-db-service
+    namespace: aks-nflows-d
+    #annotations:
+      #service.beta.kubernetes.io/azure-load-balancer-internal: "false"
+spec:
+  type: LoadBalancer
+  selector:
+    app: neo4j-db
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 7474
+      name: http
+    - protocol: TCP
+      port: 7473
+      targetPort: 7473
+      name: https
+    - protocol: TCP
+      port: 443
+      targetPort: 7687
+      name: bolt

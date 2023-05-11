@@ -1,0 +1,60 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nflows-web-application
+  namespace: aks-nflows-d
+  labels:
+    app: nflows-web-application
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nflows-web-application
+  template:
+    metadata:
+      labels:
+        app: nflows-web-application
+    spec:
+      imagePullSecrets:
+        - name: stradegi-docker-hub-secret
+      containers:
+        - name: nflows-web-application
+          image: stradegi001/tomcat:nflows4.2.45
+          #command: ["sleep", "infinity"]
+          env:
+            - name: CONTEXT_PATH
+              value: "/nFlows"
+          envFrom:
+            - configMapRef:
+                name: nflows-common-config
+          livenessProbe:
+            failureThreshold: 6
+            httpGet:
+              path: /nFlows/
+              port: http
+              scheme: HTTP
+            initialDelaySeconds: 120
+            periodSeconds: 10
+            successThreshold: 1
+            timeoutSeconds: 5
+          readinessProbe:
+            failureThreshold: 3
+            httpGet:
+              path: /nFlows/
+              port: http
+              scheme: HTTP
+            initialDelaySeconds: 30
+            periodSeconds: 5
+            successThreshold: 1
+            timeoutSeconds: 3
+          # resources:
+          #   requests:
+          #     memory: "8192Mi"
+          #     cpu: "2000m"
+          #   limits:
+          #     memory: "10240Mi"
+          #     cpu: "3500m"
+          ports:
+            - containerPort: 8080
+              name: http
+              protocol: TCP

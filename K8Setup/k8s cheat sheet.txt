@@ -1,0 +1,70 @@
+--k8s cheat sheet
+--creating a namespace
+kubectl create namespace aks-nflows-d
+
+--show all namespace
+kubectl get ns
+
+--create secret key for stradegi docker hub private repo
+kubectl create secret docker-registry stradegi-docker-hub-secret --docker-server=https://index.docker.io/v1/ --docker-username=stradegi001 --docker-password=Stradegi@123 --docker-email=thangachan@stradegi.com -n aks-nflows-d
+
+--bulid and create tag to tomcat image
+docker build --no-cache -t stradegi001/tomcat:nflows4.2.45 -f TomcatDockerfile .
+--push tomcat image to docker hub
+docker push stradegi001/tomcat:nflows4.2.45
+
+--bulid and create tag to neo4j image
+docker build --no-cache -t stradegi001/nflowsr2:neo4j4.4.7V2 -f Neo4jDockerFile .
+--push neo4j image to docker hub
+docker push stradegi001/nflowsr2:neo4j4.4.7V2
+
+--create nflows application service using yaml file
+kubectl -n aks-nflows-d apply -f .\nflows-web-application-service.yaml
+
+--create nflows neo4j service using yaml file
+kubectl -n aks-nflows-d apply -f .\nflows-neo4j-service.yaml
+
+--copy nflows db folder inside of pod
+kubectl cp .\nflows neo4j-db-5c5bb94958-9vs75:/var/lib/neo4j/data/dumps -n nflows-application
+
+--Command to get inside of pod
+kubectl -n aks-nflows-d exec -it neo4j-db-f9d446c5d-bs4lc -- bash
+
+--change access to particular folder with particular user
+chown -R neo4j: /var/lib/neo4j/data/dumps
+
+--Restore nflows db in the current pod
+neo4j-admin restore --from=/data/dumps/nflows --database=nflows --force
+
+--Create nflows database in cypher-shell of that pod
+create database nflows;
+
+--show all services for particular namespace
+kubectl -n aks-nflows-d get svc
+
+--create configmap for particular namespace
+kubectl -n aks-nflows-d create configmap nflows-common-config --from-env-file=.\configMapper.conf
+
+--show all configmaps for particular namespace
+kubectl -n aks-nflows-d get cm
+
+--create nflows web application deployment using yaml file
+kubectl -n aks-nflows-d apply -f .\nflows-web-application-deployment.yaml
+
+--create nflows neo4j deployment using yaml file
+kubectl -n aks-nflows-d apply -f .\nflows-neo4j-deployment.yaml
+
+--show all pods for particular namespace
+kubectl -n aks-nflows-d get pods
+
+--show logs of particular pod
+kubectl -n aks-nflows-d logs neo4j-db-5c5bb94958-nzw9h -f
+
+--show events for particular namespace
+kubectl -n aks-nflows-d get events --sort-by='.metadata.managedFields[0].time'
+
+--delete particular deployment in particular namespace
+kubectl -n aks-nflows-d delete deployment.apps/nflows-web-application
+
+--scale up or down deployment pod
+kubectl -n aks-nflows-d scale deployment nflows-web-application --replicas=0

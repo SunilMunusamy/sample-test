@@ -1,0 +1,55 @@
+kind: Deployment
+apiVersion: apps/v1
+metadata:
+  name: neo4j-db
+  namespace: aks-nflows-d
+  labels:
+    app: neo4j-db
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: neo4j-db
+  template:
+    metadata:
+      labels: 
+        app: neo4j-db
+    spec:
+      imagePullSecrets:
+        - name: stradegi-docker-hub-secret
+      containers:
+      - image: stradegi001/nflowsr2:neo4j4.4.7V2
+        name: neo4j-db
+        env: 
+          - name: NEO4J_dbms_security_procedures_unrestricted
+            value: "algo.*"
+        ports: ## Ports to map
+            - containerPort: 7474
+              name: http
+            - containerPort: 7687
+              name: bolt
+            - containerPort: 7473
+              name: https
+        #resources:
+              #limits:
+                #cpu: 500m
+                #ephemeral-storage: 500M
+                #memory: 500M
+              #requests:
+                #cpu: 500m
+                #ephemeral-storage: 500M
+                #memory: 500M
+        volumeMounts: ## Volumes to mount
+            - name: neo4j-data
+              mountPath: "/var/lib/neo4j/data"
+      volumes:
+          - name: neo4j-data
+            azureDisk:
+              cachingMode: ReadWrite
+              diskName: nFlowsDiskStorage
+              diskURI: /subscriptions/9e21dfc5-198a-47b0-9565-03f2c28bd22b/resourcegroups/nFlows/providers/Microsoft.Compute/disks/nFlowsDiskStorage
+              fsType: ext4
+              kind: Managed
+              readOnly: false
+            #persistentVolumeClaim:
+              #claimName: neo4j-data-claim
